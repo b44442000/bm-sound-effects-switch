@@ -15,7 +15,7 @@ class AudioDeviceMonitor:
     """Low-impact polling monitor for Windows audio device topology changes.
 
     The callback runs on the monitor thread. GUI callers should marshal it back
-    to the Tk main thread with root.after().
+    to the Tk main thread with ``root.after()``.
     """
 
     def __init__(self, on_change: Callable[[], None], interval: float = 2.0):
@@ -42,26 +42,34 @@ class AudioDeviceMonitor:
         )
 
     def poll_once(self) -> bool:
-        """Poll once and return True only when the device topology changed."""
-        signature = self._signature()
-        if self._last_signature is None:
-            self._last_signature = signature
-            return False
-        if signature == self._last_signature:
-            return False
-        self._last_signature = signature
+        """Poll once and return True when the device topology changed."""
         try:
-            self._on_change()
+            signature = self._signature()
+            if self._last_signature is None:
+                self._last_signature = signature
+                return False
+            if signature == self._last_signature:
+                return False
+            self._last_signature = signature
+            try:
+                self._on_change()
+            except Exception:
+                # A callback failure must not stop future device monitoring.
+                pass
+            return True
         except Exception:
-            # The monitor must survive a callback failure and continue polling.
-            pass
-        return True
+            # Device enumeration can temporarily fail during USB/Bluetooth changes.
+            return False
 
     def start(self) -> None:
         if self._thread and self._thread.is_alive():
             return
         self._stop.clear()
-        self._thread = threading.Thread(target=self._run, name="bm-audio-monitor", daemon=True)
+        self._thread = threading.Thread(
+            target=self._run,
+            name="bm-audio-monitor",
+            daemon=True,
+        )
         self._thread.start()
 
     def stop(self) -> None:
@@ -72,21 +80,19 @@ class AudioDeviceMonitor:
         self._thread = None
 
     def _run(self) -> None:
+        initialized = False
         if comtypes is not None:
             try:
                 comtypes.CoInitialize()
+                initialized = True
             except Exception:
                 pass
         try:
             while not self._stop.is_set():
-                try:
-                    self.poll_once()
-                except Exception:
-                    # Device enumeration can temporarily fail during USB/Bluetooth changes.
-                    pass
+                self.poll_once()
                 self._stop.wait(self._interval)
         finally:
-            if comtypes is not None:
+            if comtypes is not None and initialized:
                 try:
                     comtypes.CoUninitialize()
                 except Exception:
