@@ -20,6 +20,7 @@ class ReleaseUpdate:
 # Keep compatibility with older main.py builds that still pass the upstream repo.
 LEGACY_UPSTREAM_REPO = "BoringMan314/bm-sound-effects-switch"
 DEFAULT_FORK_REPO = "b44442000/bm-sound-effects-switch"
+_DOWNLOAD_DIGESTS: dict[str, str] = {}
 
 
 def _normalize_repo(repo: str) -> str:
@@ -128,12 +129,17 @@ def fetch_latest_update(
     if selected_asset is None:
         return None
 
+    download_url = selected_asset["browser_download_url"]
+    sha256 = _asset_sha256(selected_asset)
+    if sha256:
+        _DOWNLOAD_DIGESTS[download_url] = sha256
+
     return ReleaseUpdate(
         major=parsed[0],
         minor=parsed[1],
         patch=parsed[2],
-        download_url=selected_asset["browser_download_url"],
-        sha256=_asset_sha256(selected_asset),
+        download_url=download_url,
+        sha256=sha256,
     )
 
 
@@ -168,7 +174,7 @@ def download_release(
     expected_sha256: Optional[str] = None,
 ) -> bool:
     """Download an update atomically and optionally verify its SHA-256."""
-    expected = (expected_sha256 or "").strip().lower()
+    expected = (expected_sha256 or _DOWNLOAD_DIGESTS.get(url) or "").strip().lower()
     if expected.startswith("sha256:"):
         expected = expected[7:]
     if expected and not re.fullmatch(r"[0-9a-f]{64}", expected):
