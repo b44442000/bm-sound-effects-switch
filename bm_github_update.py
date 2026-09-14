@@ -17,6 +17,18 @@ class ReleaseUpdate:
     sha256: Optional[str] = None
 
 
+# Keep compatibility with older main.py builds that still pass the upstream repo.
+LEGACY_UPSTREAM_REPO = "BoringMan314/bm-sound-effects-switch"
+DEFAULT_FORK_REPO = "b44442000/bm-sound-effects-switch"
+
+
+def _normalize_repo(repo: str) -> str:
+    repo = (repo or "").strip().strip("/")
+    if repo == LEGACY_UPSTREAM_REPO:
+        return DEFAULT_FORK_REPO
+    return repo
+
+
 def parse_version_tag(tag: str) -> Optional[Tuple[int, int, int]]:
     t = (tag or "").strip()
     if t.lower().startswith("v"):
@@ -79,6 +91,9 @@ def fetch_latest_update(
     pick_asset: Callable[[str], bool],
     timeout: float = 15,
 ) -> Optional[ReleaseUpdate]:
+    repo = _normalize_repo(repo)
+    if not repo or "/" not in repo:
+        return None
     url = f"https://api.github.com/repos/{repo}/releases/latest"
     req = urllib.request.Request(
         url,
