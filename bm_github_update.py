@@ -180,14 +180,19 @@ def download_release(
     if expected and not re.fullmatch(r"[0-9a-f]{64}", expected):
         return False
 
-    if os.path.isfile(dest_path):
-        if not expected:
-            return True
+    if os.path.isfile(dest_path) and expected:
         try:
-            return _sha256_file(dest_path) == expected
+            if _sha256_file(dest_path) == expected:
+                return True
+        except OSError:
+            pass
+        try:
+            os.remove(dest_path)
         except OSError:
             return False
 
+    # If no digest is available, do not trust an old cached file. Download a
+    # fresh copy into a temporary file and replace the destination atomically.
     temp_path = dest_path + ".download"
     req = urllib.request.Request(
         url,
