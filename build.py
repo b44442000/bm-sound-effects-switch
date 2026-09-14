@@ -16,6 +16,10 @@ HIDDEN_IMPORTS = [
     "keyboard",
     "bm_single_instance",
     "bm_github_update",
+    "bm_audio_monitor",
+    "bm_config",
+    "bm_hotkeys",
+    "bm_ui",
     "pycaw",
     "comtypes",
 ]
