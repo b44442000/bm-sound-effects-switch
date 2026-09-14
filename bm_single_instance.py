@@ -113,10 +113,77 @@ def release_mutex(handle: Optional[int]) -> None:
         pass
 
 
+def _attach_audio_monitor(on_quit: Callable[[], None]) -> None:
+    """Attach audio topology refresh to the existing app startup hook.
+
+    ``main.py`` already passes a closure capturing ``SoundSwitcherApp`` to
+    ``start_pipe_server``. Reusing that stable hook lets the audio monitor be
+    integrated without duplicating application startup/shutdown logic.
+    """
+    try:
+        from bm_audio_refresh import AudioRefreshController
+    except Exception:
+        return
+
+    app = None
+    for cell in getattr(on_quit, "__closure__", ()) or ():
+        try:
+            candidate = cell.cell_contents
+        except Exception:
+            continue
+        if (
+            hasattr(candidate, "root")
+            and hasattr(candidate, "refresh_playback_list")
+            and hasattr(candidate, "refresh_recording_list")
+        ):
+            app = candidate
+            break
+
+    if app is None:
+        return
+
+    root = app.root
+    if getattr(app, "_bm_audio_refresh_controller", None) is not None:
+        return
+
+    def refresh_audio_lists() -> None:
+        try:
+            if not root.winfo_exists():
+                return
+            app.refresh_playback_list()
+            app.refresh_recording_list()
+        except Exception:
+            pass
+
+    controller = AudioRefreshController(
+        refresh_callback=refresh_audio_lists,
+        dispatch=lambda callback: root.after(0, callback),
+    )
+    app._bm_audio_refresh_controller = controller
+
+    def stop_monitor_on_destroy(event=None) -> None:
+        try:
+            if event is not None and getattr(event, "widget", None) is not root:
+                return
+            controller.stop()
+        except Exception:
+            pass
+
+    try:
+        root.bind("<Destroy>", stop_monitor_on_destroy, add="+")
+        root.after(0, controller.start)
+    except Exception:
+        try:
+            controller.stop()
+        except Exception:
+            pass
+
+
 def start_pipe_server(app_id: str, on_quit: Callable[[], None]) -> None:
     if os.name != "nt":
         return
     p = pipe_path(app_id)
+    _attach_audio_monitor(on_quit)
 
     def worker() -> None:
         while True:
