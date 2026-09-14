@@ -82,3 +82,21 @@ def test_download_release_rejects_bad_sha256(tmp_path, monkeypatch):
         expected_sha256="b" * 64,
     )
     assert not dest.exists()
+
+
+def test_download_release_replaces_stale_cached_file(tmp_path, monkeypatch):
+    payload = b"fresh update payload"
+    dest = tmp_path / "update.exe"
+    dest.write_bytes(b"stale or corrupted payload")
+
+    monkeypatch.setattr(
+        updater.urllib.request,
+        "urlopen",
+        lambda *a, **k: _Response(payload),
+    )
+    assert updater.download_release(
+        "https://example.invalid/update.exe",
+        str(dest),
+        "test",
+    )
+    assert dest.read_bytes() == payload
