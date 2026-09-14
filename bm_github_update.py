@@ -1,3 +1,4 @@
+import hashlib
 import json
 import os
 import re
@@ -13,6 +14,7 @@ class ReleaseUpdate:
     minor: int
     patch: int
     download_url: str
+    sha256: Optional[str] = None
 
 
 def parse_version_tag(tag: str) -> Optional[Tuple[int, int, int]]:
@@ -57,6 +59,19 @@ def make_pick_win10_exe(stem: str) -> Callable[[str], bool]:
     return pick
 
 
+def _asset_sha256(asset: dict) -> Optional[str]:
+    """Return GitHub's SHA-256 asset digest when available."""
+    digest = asset.get("digest")
+    if not isinstance(digest, str):
+        return None
+    digest = digest.strip().lower()
+    if digest.startswith("sha256:"):
+        digest = digest[7:]
+    if re.fullmatch(r"[0-9a-f]{64}", digest):
+        return digest
+    return None
+
+
 def fetch_latest_update(
     repo: str,
     user_agent: str,
@@ -65,7 +80,10 @@ def fetch_latest_update(
     timeout: float = 15,
 ) -> Optional[ReleaseUpdate]:
     url = f"https://api.github.com/repos/{repo}/releases/latest"
-    req = urllib.request.Request(url, headers={"User-Agent": user_agent})
+    req = urllib.request.Request(
+        url,
+        headers={"User-Agent": user_agent, "Accept": "application/vnd.github+json"},
+    )
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             data = json.loads(resp.read().decode("utf-8"))
@@ -81,26 +99,26 @@ def fetch_latest_update(
     if not isinstance(assets, list):
         return None
 
-    download_url = None
+    selected_asset = None
     for asset in assets:
         if not isinstance(asset, dict):
             continue
         name = asset.get("name")
-        if not isinstance(name, str) or not pick_asset(name):
-            continue
-        browser_url = asset.get("browser_download_url")
-        if isinstance(browser_url, str) and browser_url:
-            download_url = browser_url
-            break
+        if isinstance(name, str) and pick_asset(name):
+            browser_url = asset.get("browser_download_url")
+            if isinstance(browser_url, str) and browser_url:
+                selected_asset = asset
+                break
 
-    if not download_url:
+    if selected_asset is None:
         return None
 
     return ReleaseUpdate(
         major=parsed[0],
         minor=parsed[1],
         patch=parsed[2],
-        download_url=download_url,
+        download_url=selected_asset["browser_download_url"],
+        sha256=_asset_sha256(selected_asset),
     )
 
 
@@ -116,12 +134,44 @@ def build_save_path(
     return os.path.join(app_dir, f"{file_stem}-{label}{extension}")
 
 
-def download_release(url: str, dest_path: str, user_agent: str, timeout: float = 600) -> bool:
+def _sha256_file(path: str, chunk_size: int = 1024 * 1024) -> str:
+    digest = hashlib.sha256()
+    with open(path, "rb") as src:
+        while True:
+            chunk = src.read(chunk_size)
+            if not chunk:
+                break
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def download_release(
+    url: str,
+    dest_path: str,
+    user_agent: str,
+    timeout: float = 600,
+    expected_sha256: Optional[str] = None,
+) -> bool:
+    """Download an update atomically and optionally verify its SHA-256."""
+    expected = (expected_sha256 or "").strip().lower()
+    if expected.startswith("sha256:"):
+        expected = expected[7:]
+    if expected and not re.fullmatch(r"[0-9a-f]{64}", expected):
+        return False
+
     if os.path.isfile(dest_path):
-        return True
+        if not expected:
+            return True
+        try:
+            return _sha256_file(dest_path) == expected
+        except OSError:
+            return False
 
     temp_path = dest_path + ".download"
-    req = urllib.request.Request(url, headers={"User-Agent": user_agent})
+    req = urllib.request.Request(
+        url,
+        headers={"User-Agent": user_agent, "Accept": "application/octet-stream"},
+    )
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             with open(temp_path, "wb") as out:
@@ -130,8 +180,14 @@ def download_release(url: str, dest_path: str, user_agent: str, timeout: float =
                     if not chunk:
                         break
                     out.write(chunk)
-        if os.path.isfile(dest_path):
-            os.remove(dest_path)
+
+        if expected and _sha256_file(temp_path) != expected:
+            try:
+                os.remove(temp_path)
+            except OSError:
+                pass
+            return False
+
         os.replace(temp_path, dest_path)
         return True
     except (urllib.error.URLError, OSError):
