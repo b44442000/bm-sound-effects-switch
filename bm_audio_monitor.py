@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import threading
-import time
 from typing import Callable, Optional
 
 try:
@@ -42,6 +41,22 @@ class AudioDeviceMonitor:
             )
         )
 
+    def poll_once(self) -> bool:
+        """Poll once and return True only when the device topology changed."""
+        signature = self._signature()
+        if self._last_signature is None:
+            self._last_signature = signature
+            return False
+        if signature == self._last_signature:
+            return False
+        self._last_signature = signature
+        try:
+            self._on_change()
+        except Exception:
+            # The monitor must survive a callback failure and continue polling.
+            pass
+        return True
+
     def start(self) -> None:
         if self._thread and self._thread.is_alive():
             return
@@ -65,15 +80,7 @@ class AudioDeviceMonitor:
         try:
             while not self._stop.is_set():
                 try:
-                    signature = self._signature()
-                    if self._last_signature is None:
-                        self._last_signature = signature
-                    elif signature != self._last_signature:
-                        self._last_signature = signature
-                        try:
-                            self._on_change()
-                        except Exception:
-                            pass
+                    self.poll_once()
                 except Exception:
                     # Device enumeration can temporarily fail during USB/Bluetooth changes.
                     pass
